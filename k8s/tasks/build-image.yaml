@@ -1,0 +1,40 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-image
+  namespace: tractor-lab
+spec:
+  params:
+    - name: IMAGE
+      type: string
+      default: docker.io/schantech/tractor-telemetry:v1
+  workspaces:
+    - name: source
+  volumes:
+    - name: registry-auth
+      secret:
+        secretName: dockerhub-credentials
+  steps:
+    - name: build
+      image: quay.io/buildah/stable:v1.39
+      workingDir: $(workspaces.source.path)/source
+      env:
+        - name: REGISTRY_AUTH_FILE
+          value: /registry-auth/.dockerconfigjson
+      volumeMounts:
+        - name: registry-auth
+          mountPath: /registry-auth
+          readOnly: true
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/sh
+        set -eu
+        buildah bud --storage-driver=vfs \
+          --format=docker \
+          -t $(params.IMAGE) \
+          -f Dockerfile .
+        buildah images --storage-driver=vfs
+        buildah push --storage-driver=vfs \
+          --authfile "$REGISTRY_AUTH_FILE" \
+          $(params.IMAGE)

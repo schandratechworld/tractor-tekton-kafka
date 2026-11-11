@@ -27,3 +27,15 @@ spec:
       workspaces:
         - name: source
           workspace: shared-workspace
+
+    - name: build-container-image
+      runAfter:
+        - run-unit-tests
+      taskRef:
+        name: build-image
+      params:
+        - name: IMAGE
+          value: docker.io/schantech/tractor-telemetry:v1
+      workspaces:
+        - name: source
+          workspace: shared-workspace
