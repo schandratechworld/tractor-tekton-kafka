@@ -1,0 +1,82 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: tractor-telemetry
+spec:
+  params:
+    - name: records
+      type: string
+      default: '12'
+  tasks:
+    - name: prepare-topic
+      taskSpec:
+        steps:
+          - name: create-topic
+            image: apache/kafka:3.9.1
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic tractor.telemetry.raw --partitions 3 --replication-factor 1
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic tractor.telemetry.raw
+    - name: produce-telemetry
+      runAfter: [prepare-topic]
+      params:
+        - name: records
+          value: $(params.records)
+      taskSpec:
+        params:
+          - name: records
+            type: string
+        steps:
+          - name: publish
+            image: python:3.12-slim
+            env:
+              - {name: RECORDS, value: '$(params.records)'}
+            script: |
+              #!/usr/bin/env python3
+              import json, os, subprocess, sys, time
+              from datetime import datetime, timezone
+              subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', 'kafka-python==2.2.15'])
+              from kafka import KafkaProducer
+              producer = KafkaProducer(bootstrap_servers=['kafka:9092'], key_serializer=lambda v:v.encode(), value_serializer=lambda v:json.dumps(v).encode(), retries=5)
+              for i in range(int(os.environ['RECORDS'])):
+                  tractor=f'TRACTOR-{(i % 3)+1:03d}'
+                  event={'tractor_id':tractor,'timestamp':datetime.now(timezone.utc).isoformat(),'speed_kph':round(8+(i*3.7)%35,1),'engine_temp_c':round(72+(i*2.4)%35,1),'fuel_pct':round(90-i*1.8,1),'latitude':round(52.13+i*0.0002,6),'longitude':round(-106.67-i*0.0002,6)}
+                  producer.send('tractor.telemetry.raw',key=tractor,value=event).get(timeout=20)
+                  print('PRODUCED',json.dumps(event),flush=True)
+              producer.flush()
+    - name: consume-and-analyze
+      runAfter: [produce-telemetry]
+      params:
+        - name: records
+          value: $(params.records)
+      taskSpec:
+        params:
+          - name: records
+            type: string
+        steps:
+          - name: analyze
+            image: python:3.12-slim
+            env:
+              - {name: RECORDS, value: '$(params.records)'}
+            script: |
+              #!/usr/bin/env python3
+              import json,os,subprocess,sys
+              subprocess.check_call([sys.executable,'-m','pip','install','--quiet','kafka-python==2.2.15'])
+              from kafka import KafkaConsumer,TopicPartition
+              consumer=KafkaConsumer(bootstrap_servers=['kafka:9092'],enable_auto_commit=False,auto_offset_reset='earliest',consumer_timeout_ms=15000,value_deserializer=lambda b:json.loads(b.decode()))
+              partitions=consumer.partitions_for_topic('tractor.telemetry.raw')
+              if not partitions: raise RuntimeError('Topic not found')
+              tps=[TopicPartition('tractor.telemetry.raw',p) for p in sorted(partitions)]
+              consumer.assign(tps)
+              consumer.seek_to_beginning(*tps)
+              records=[]
+              for message in consumer:
+                  records.append(message.value)
+                  print('CONSUMED',json.dumps(message.value),flush=True)
+                  if len(records)>=int(os.environ['RECORDS']): break
+              assert len(records)>=int(os.environ['RECORDS']),f'Expected {os.environ["RECORDS"]} records, got {len(records)}'
+              alerts=[r for r in records if r['engine_temp_c']>90]
+              print('SUMMARY',json.dumps({'total_records':len(records),'unique_tractors':len(set(r['tractor_id'] for r in records)),'high_temperature_alerts':len(alerts)}),flush=True)
+              print('SUCCESS: tractor telemetry Kafka integration verified',flush=True)
+              consumer.close()
