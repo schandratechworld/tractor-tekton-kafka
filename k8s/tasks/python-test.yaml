@@ -1,0 +1,16 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: python-test
+spec:
+  workspaces:
+    - name: source
+  steps:
+    - name: pytest
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)/source
+      script: |
+        #!/bin/sh
+        set -eu
+        python -m pip install --quiet pytest==9.0.2
+        python -m pytest tests/test_telemetry.py -v
