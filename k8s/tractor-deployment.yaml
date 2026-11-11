@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tractor-telemetry
+  namespace: tractor-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tractor-telemetry
+  template:
+    metadata:
+      labels:
+        app: tractor-telemetry
+    spec:
+      containers:
+        - name: tractor-telemetry
+          image: docker.io/schantech/tractor-telemetry:v1
+          imagePullPolicy: Always
+          env:
+            - name: CONTINUOUS
+              value: "true"
+            - name: INTERVAL_SECONDS
+              value: "5"
